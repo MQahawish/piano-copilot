@@ -21,7 +21,7 @@ import numpy
 import pygame
 import soundfile
 import mido  # Added MIDI library
-
+import sys
 ANCHOR_INDICATOR = " anchor"
 ANCHOR_NOTE_REGEX = re.compile(r"\s[abcdefg]$")
 DESCRIPTION = 'Use your computer keyboard as a "piano"'
@@ -59,7 +59,7 @@ def get_parser() -> argparse.ArgumentParser:
         default=default_wav_file,
         help="WAV file (default: {})".format(default_wav_file),
     )
-    default_keyboard_file = "keyboards/qwerty_piano.txt"
+    default_keyboard_file = "keyboards/azerty_typewriter.txt"
     parser.add_argument(
         "--keyboard",
         "-k",
@@ -443,6 +443,221 @@ class StatusMessage:
         # Draw to screen
         screen.blit(text_surface, position)
 
+class MIDIPlayer:
+    def __init__(self, status_callback=None):
+        self.current_midi = None
+        self.playing = False
+        self.status_callback = status_callback
+        self.process = None
+        
+    def load_midi(self, midi_path):
+        """Load a MIDI file for playback"""
+        if not os.path.exists(midi_path):
+            if self.status_callback:
+                self.status_callback("MIDI file not found", (255, 100, 100))
+            return False
+            
+        self.current_midi = midi_path
+        return True
+        
+    def play(self):
+        """Start playback of loaded MIDI file"""
+        if not self.current_midi or not os.path.exists(self.current_midi):
+            if self.status_callback:
+                self.status_callback("No MIDI file loaded", (255, 100, 100))
+            return False
+            
+        if self.playing:
+            return True
+            
+        # Play MIDI using an external player (platform dependent)
+        # This is a simple implementation - in production you might want to use
+        # a proper MIDI library that integrates better with pygame
+        try:
+            import subprocess
+            
+            if sys.platform == 'win32':
+                self.process = subprocess.Popen(['start', 'wmplayer', self.current_midi], 
+                                               shell=True)
+            elif sys.platform == 'darwin':
+                self.process = subprocess.Popen(['afplay', self.current_midi])
+            else:
+                self.process = subprocess.Popen(['timidity', self.current_midi])
+                
+            self.playing = True
+            
+            if self.status_callback:
+                self.status_callback(f"Playing {os.path.basename(self.current_midi)}", (100, 255, 100))
+            return True
+            
+        except Exception as e:
+            if self.status_callback:
+                self.status_callback(f"Playback error: {str(e)}", (255, 100, 100))
+            return False
+            
+    def pause(self):
+        """Pause current playback"""
+        if not self.playing or not self.process:
+            return
+            
+        try:
+            if self.process:
+                self.process.terminate()
+                self.process = None
+                
+            self.playing = False
+            
+            if self.status_callback:
+                self.status_callback("Playback paused", (255, 200, 100))
+                
+        except Exception as e:
+            if self.status_callback:
+                self.status_callback(f"Error pausing: {str(e)}", (255, 100, 100))
+
+    # Create slider for temperature control
+class Slider:
+    def __init__(self, x, y, width, height, min_val, max_val, initial_val, label, integer_only=False):
+        self.rect = pygame.Rect(x, y, width, height)
+        self.handle_radius = height + 4  # Slightly larger handle
+        self.min_val = min_val
+        self.max_val = max_val
+        self.value = initial_val
+        self.label = label
+        self.integer_only = integer_only  # New flag to control integer-only mode
+        self.font = pygame.font.SysFont("Arial", 16)
+        self.value_font = pygame.font.SysFont("Arial", 14)
+        self.dragging = False
+        self.track_color = (60, 60, 70)
+        self.track_active_color = (80, 100, 140)
+        self.handle_color = (120, 140, 220)
+        self.handle_hover_color = (140, 160, 240)
+        self.text_color = WHITE
+        self.is_hovered = False
+        
+        # If integer-only mode is enabled, ensure the initial value is an integer
+        if self.integer_only:
+            self.value = int(self.value)
+        
+        # Calculate handle position
+        self.handle_x = self._value_to_pos(initial_val)
+        
+    def _value_to_pos(self, value):
+        """Convert slider value to handle x position"""
+        normalized = (value - self.min_val) / (self.max_val - self.min_val)
+        return self.rect.x + int(normalized * self.rect.width)
+        
+    def _pos_to_value(self, pos_x):
+        """Convert handle x position to slider value"""
+        pos = max(self.rect.x, min(pos_x, self.rect.x + self.rect.width))
+        normalized = (pos - self.rect.x) / self.rect.width
+        value = self.min_val + normalized * (self.max_val - self.min_val)
+        
+        # If integer-only mode is enabled, round to the nearest integer
+        if self.integer_only:
+            value = int(round(value))
+            
+        return value
+        
+    def draw(self, screen):
+        # Draw background track (inactive part)
+        pygame.draw.rect(screen, self.track_color, self.rect, border_radius=self.rect.height//2)
+        
+        # Draw active part of the track
+        active_width = self.handle_x - self.rect.x
+        if active_width > 0:
+            active_rect = pygame.Rect(self.rect.x, self.rect.y, active_width, self.rect.height)
+            pygame.draw.rect(screen, self.track_active_color, active_rect, border_radius=self.rect.height//2)
+        
+        # Draw label above slider with value
+        label_text = self.font.render(f"{self.label}", True, self.text_color)
+        
+        # Format value based on integer-only mode
+        if self.integer_only:
+            value_text = self.value_font.render(f"{self.value}", True, (180, 200, 255))
+        else:
+            value_text = self.value_font.render(f"{self.value:.2f}", True, (180, 200, 255))
+        
+        # Position label centered above slider
+        label_x = self.rect.x + (self.rect.width - label_text.get_width()) // 2
+        screen.blit(label_text, (label_x, self.rect.y - 25))
+        
+        # Position value text below the label
+        value_x = self.rect.x + (self.rect.width - value_text.get_width()) // 2
+        screen.blit(value_text, (value_x, self.rect.y - 5))
+        
+        # Draw min/max values as smaller text
+        # Format based on integer-only mode
+        if self.integer_only:
+            min_text = self.value_font.render(f"{int(self.min_val)}", True, (150, 150, 150))
+            max_text = self.value_font.render(f"{int(self.max_val)}", True, (150, 150, 150))
+        else:
+            min_text = self.value_font.render(f"{self.min_val}", True, (150, 150, 150))
+            max_text = self.value_font.render(f"{self.max_val}", True, (150, 150, 150))
+            
+        screen.blit(min_text, (self.rect.x - 5, self.rect.y + self.rect.height + 5))
+        screen.blit(max_text, (self.rect.x + self.rect.width - 10, self.rect.y + self.rect.height + 5))
+        
+        # Draw handle with hover effect
+        handle_color = self.handle_hover_color if self.is_hovered or self.dragging else self.handle_color
+        pygame.draw.circle(screen, handle_color, (self.handle_x, self.rect.centery), self.handle_radius)
+        
+        # Draw handle border for better visibility
+        pygame.draw.circle(screen, (255, 255, 255, 100), (self.handle_x, self.rect.centery), 
+                         self.handle_radius, 1)
+        
+    def update(self, mouse_pos):
+        # Check if mouse is hovering over handle
+        mouse_x, mouse_y = mouse_pos
+        handle_rect = pygame.Rect(self.handle_x - self.handle_radius, 
+                                 self.rect.centery - self.handle_radius,
+                                 self.handle_radius * 2, 
+                                 self.handle_radius * 2)
+        self.is_hovered = handle_rect.collidepoint(mouse_x, mouse_y)
+        
+    def handle_event(self, event):
+        if event.type == pygame.MOUSEBUTTONDOWN:
+            # Check if clicked on handle or track
+            mouse_x, mouse_y = event.pos
+            handle_rect = pygame.Rect(self.handle_x - self.handle_radius, 
+                                     self.rect.centery - self.handle_radius,
+                                     self.handle_radius * 2, 
+                                     self.handle_radius * 2)
+                                     
+            # Allow clicking anywhere on the track to move handle
+            track_rect = pygame.Rect(
+                self.rect.x - self.handle_radius, 
+                self.rect.y - self.handle_radius,
+                self.rect.width + self.handle_radius * 2,
+                self.rect.height + self.handle_radius * 2
+            )
+            
+            if handle_rect.collidepoint(mouse_x, mouse_y) or track_rect.collidepoint(mouse_x, mouse_y):
+                self.dragging = True
+                # Immediately update handle position when clicked
+                self.handle_x = max(self.rect.x, min(mouse_x, self.rect.x + self.rect.width))
+                self.value = self._pos_to_value(self.handle_x)
+                return True
+                
+        elif event.type == pygame.MOUSEBUTTONUP:
+            if self.dragging:
+                self.dragging = False
+                # Update handle position to match integer value for integer-only sliders
+                if self.integer_only:
+                    self.handle_x = self._value_to_pos(self.value)
+                return True
+            
+        elif event.type == pygame.MOUSEMOTION:
+            # Update hover state
+            self.update(event.pos)
+            
+            # Update position if dragging
+            if self.dragging:
+                self.handle_x = max(self.rect.x, min(event.pos[0], self.rect.x + self.rect.width))
+                self.value = self._pos_to_value(self.handle_x)
+                return True
+            
+        return False
+
 def configure_pygame_audio_and_set_ui(
     framerate_hz: int,
     channels: int,
@@ -450,10 +665,10 @@ def configure_pygame_audio_and_set_ui(
     color_to_key: Dict[str, List[kl.Key]],
     key_color: Tuple[int, int, int, int],
     key_txt_color: Tuple[int, int, int, int],
-) -> Tuple[pygame.Surface, klp.KeyboardLayout, List[Button], UIPanel, StatusMessage]:
+) -> Tuple[pygame.Surface, klp.KeyboardLayout, List[Button], UIPanel, UIPanel, StatusMessage, Slider, Slider]:
     # ui
     pygame.display.init()
-    pygame.display.set_caption("Pianoputer")
+    pygame.display.set_caption("Pianoputer AI")
 
     # block events that we don't want, this must be after display.init
     pygame.event.set_blocked(None)
@@ -514,18 +729,19 @@ def configure_pygame_audio_and_set_ui(
         layout_name, keyboard_info, letter_key_size, key_info, overrides
     )
     
-    # Increase control panel height to make more room for status message and spacing
-    control_panel_height = 150
+    # Panel dimensions
+    control_panel_height = 120
+    ai_panel_height = 300  # Make taller to fit sliders and controls properly
     
     screen_width = max(keyboard.rect.width, 800)  # Ensure minimum width
-    screen_height = keyboard.rect.height + control_panel_height
+    screen_height = keyboard.rect.height + control_panel_height + ai_panel_height + 30  # Extra spacing
     
     screen = pygame.display.set_mode((screen_width, screen_height))
     
-    # Create a dark background for the whole application
-    screen.fill((20, 20, 25))  # Dark blue-gray background
+    # Dark background
+    screen.fill((20, 20, 25))
     
-    # Create UI panel for controls
+    # Create UI panel for recording controls
     panel = UIPanel(10, keyboard.rect.height + 10, screen_width - 20, control_panel_height - 20, 
                     bg_color=(40, 40, 45))
     panel.set_title("Recording Controls")
@@ -535,10 +751,9 @@ def configure_pygame_audio_and_set_ui(
     button_height = 40
     button_spacing = (screen_width - 60 - (button_width * 3)) // 2  # Calculate equal spacing
     start_x = 30  # Start from left with padding
-    # Position buttons lower in the panel to create more space
-    button_y_offset = keyboard.rect.height + 45  # Increased Y position
+    button_y_offset = keyboard.rect.height + 45  # Y position for recording controls
     
-    # Create new modern buttons with icons - positioned lower in the panel
+    # Create recording control buttons
     record_button = Button(
         start_x, 
         button_y_offset, 
@@ -570,12 +785,122 @@ def configure_pygame_audio_and_set_ui(
         icon="save_midi"
     )
     
-    # Add buttons to panel
+    # Add recording buttons to panel
     panel.add_element(record_button)
     panel.add_element(stop_button)
     panel.add_element(save_midi_button)
     
-    buttons = [record_button, stop_button, save_midi_button]
+    # Calculate AI panel position (below recording panel)
+    ai_panel_y = keyboard.rect.height + control_panel_height + 10
+    
+    # Create AI control panel
+    ai_panel = UIPanel(
+        10, 
+        ai_panel_y, 
+        screen_width - 20, 
+        ai_panel_height - 20, 
+        bg_color=(35, 40, 50)
+    )
+    ai_panel.set_title("AI Composition")
+    
+    # First row of AI controls (Generate, Accept, Retry)
+    ai_button_y = ai_panel_y + 45  # First row of AI buttons
+    
+    generate_button = Button(
+        start_x, 
+        ai_button_y,
+        button_width, 
+        button_height, 
+        (100, 130, 220, 255),  # Blue
+        "GENERATE",
+        text_color=WHITE
+    )
+    
+    accept_button = Button(
+        start_x + button_width + button_spacing, 
+        ai_button_y,
+        button_width, 
+        button_height, 
+        (100, 220, 100, 255),  # Green
+        "ACCEPT",
+        text_color=WHITE
+    )
+    
+    retry_button = Button(
+        start_x + (button_width + button_spacing) * 2, 
+        ai_button_y,
+        button_width, 
+        button_height, 
+        (220, 160, 40, 255),  # Orange
+        "RETRY",
+        text_color=WHITE
+    )
+    
+    # Second row - Playback controls (Play/Pause side by side)
+    playback_y = ai_button_y + button_height + 20  # Second row with 20px spacing
+    
+    play_button = Button(
+        start_x, 
+        playback_y,
+        button_width // 2, 
+        button_height, 
+        (100, 180, 100, 255),  # Green
+        "PLAY",
+        text_color=WHITE
+    )
+    
+    pause_button = Button(
+        start_x + button_width // 2, 
+        playback_y,
+        button_width // 2, 
+        button_height, 
+        (70, 70, 80, 255),  # Dark gray
+        "PAUSE",
+        text_color=WHITE
+    )
+    
+    # Revised slider positions - make sure they're centered and properly spaced
+    slider_width = screen_width - 140  # Leave margins on sides
+    slider_x = (screen_width - slider_width) // 2  # Center horizontally
+    
+    # Position sliders with enough spacing from top buttons and from each other
+    temp_slider_y = playback_y + button_height + 30  # First slider position
+    tokens_slider_y = temp_slider_y + 60  # Second slider position with good vertical spacing
+    
+    # Create properly centered sliders
+    temp_slider = Slider(
+        slider_x, 
+        temp_slider_y,
+        slider_width, 
+        10, 
+        0.5, 1.5, 0.9, 
+        "Temperature",
+        integer_only=False  # Explicitly set to false for clarity
+    )
+
+    tokens_slider = Slider(
+        slider_x, 
+        tokens_slider_y,
+        slider_width, 
+        10, 
+        64, 512, 256, 
+        "Max Tokens",
+        integer_only=True  # Set to true to ensure integers only
+    )
+    
+    # Add all AI controls to the panel
+    ai_panel.add_element(generate_button)
+    ai_panel.add_element(accept_button)
+    ai_panel.add_element(retry_button)
+    ai_panel.add_element(play_button)
+    ai_panel.add_element(pause_button)
+    
+    # Combine all buttons for the main list
+    buttons = [
+        record_button, stop_button, save_midi_button,  # Recording controls
+        generate_button, accept_button, retry_button,  # AI composition controls
+        play_button, pause_button                      # Playback controls
+    ]
     
     # Create status message handler
     status = StatusMessage()
@@ -584,13 +909,17 @@ def configure_pygame_audio_and_set_ui(
     if keyboard:
         keyboard.draw(screen)
     
-    # Draw UI panel with all buttons
+    # Draw UI panels with all buttons
     panel.draw(screen)
+    ai_panel.draw(screen)
+    
+    # Draw sliders
+    temp_slider.draw(screen)
+    tokens_slider.draw(screen)
     
     pygame.display.update()
-    return screen, keyboard, buttons, panel, status
+    return screen, keyboard, buttons, panel, ai_panel, status, temp_slider, tokens_slider
 
-# Update play_until_user_exits function to use the new UI components
 def play_until_user_exits(
     keys: List[kl.Key],
     key_sounds: List[pygame.mixer.Sound],
@@ -602,7 +931,10 @@ def play_until_user_exits(
     tones: List[int],
     anchor_note: Optional[str],
     panel: UIPanel = None,
+    ai_panel: UIPanel = None,
     status: StatusMessage = None,
+    temp_slider = None,
+    tokens_slider = None,
 ):
     sound_by_key = dict(zip(keys, key_sounds))
     playing = True
@@ -610,10 +942,16 @@ def play_until_user_exits(
     # Initialize the recorder
     recorder = NoteRecorder(framerate_hz, channels, tones)
     
+    # Initialize MIDI player
+    midi_player = MIDIPlayer(status_callback=status.set_message if status else None)
+    
     # Create recording indicator animation variables
     recording_indicator_size = 10
     recording_indicator_alpha = 255
     recording_indicator_growing = False
+    
+    # Track AI generation state
+    ai_generation_active = False
     
     # Frame timing for smoother animations
     clock = pygame.time.Clock()
@@ -624,6 +962,12 @@ def play_until_user_exits(
         # Update button hover states
         for button in buttons:
             button.update(mouse_pos)
+        
+        # Update slider hover states
+        if temp_slider:
+            temp_slider.update(mouse_pos)
+        if tokens_slider:
+            tokens_slider.update(mouse_pos)
         
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -667,33 +1011,232 @@ def play_until_user_exits(
             elif event.type == pygame.MOUSEBUTTONDOWN:
                 pos = pygame.mouse.get_pos()
                 
-                # Check for button clicks
-                if buttons[0].is_clicked(pos):  # Record button
-                    recorder.start_recording()
-                    if status:
-                        status.set_message("Recording started...", (255, 100, 100))
-                    
-                    # Update button active states
-                    buttons[0].is_active = True
-                    buttons[1].is_active = False
-                    
-                elif buttons[1].is_clicked(pos):  # Stop button
-                    recorder.stop_recording()
-                    if status:
-                        status.set_message("Recording stopped. Ready to save.", (100, 255, 100))
-                    
-                    # Update button active states
-                    buttons[0].is_active = False
-                    buttons[1].is_active = True
-                    
-                    
-                elif buttons[2].is_clicked(pos):  # Save MIDI button
-                    if recorder.save_midi_recording(anchor_note):
+                # Process slider events first - they take priority
+                slider_handled = False
+                
+                # Check if either slider is clicked
+                if temp_slider:
+                    slider_handled = temp_slider.handle_event(event)
+                
+                if not slider_handled and tokens_slider:
+                    slider_handled = tokens_slider.handle_event(event)
+                
+                # Only process button clicks if we didn't interact with sliders
+                if not slider_handled:
+                    # Check for recording button clicks
+                    if buttons[0].is_clicked(pos):  # Record button
+                        recorder.start_recording()
                         if status:
-                            status.set_message(f"MIDI recording saved to {RECORDINGS_FOLDER}", (100, 100, 255))
-                    else:
+                            status.set_message("Recording started...", (255, 100, 100))
+                        
+                        # Update button active states
+                        buttons[0].is_active = True
+                        buttons[1].is_active = False
+                        
+                    elif buttons[1].is_clicked(pos):  # Stop button
+                        recorder.stop_recording()
                         if status:
-                            status.set_message("No recording to save", (255, 100, 100))
+                            status.set_message("Recording stopped. Ready to save or generate.", (100, 255, 100))
+                        
+                        # Update button active states
+                        buttons[0].is_active = False
+                        buttons[1].is_active = True
+                        
+                    elif buttons[2].is_clicked(pos):  # Save MIDI button
+                        if recorder.save_midi_recording(anchor_note):
+                            if status:
+                                status.set_message(f"MIDI recording saved to {RECORDINGS_FOLDER}", (100, 100, 255))
+                        else:
+                            if status:
+                                status.set_message("No recording to save", (255, 100, 100))
+                    
+                    # Check for AI button clicks
+                    elif buttons[3].is_clicked(pos):  # Generate button
+                        if not recorder.midi_notes:
+                            if status:
+                                status.set_message("Record something first!", (255, 100, 100))
+                        else:
+                            if status:
+                                status.set_message("Generating AI continuation...", (100, 100, 255))
+                            
+                            # Show active state
+                            buttons[3].is_active = True
+                            ai_generation_active = True
+                            
+                            # Use parameters from sliders
+                            temperature = temp_slider.value if temp_slider else 0.9
+                            max_tokens = int(tokens_slider.value) if tokens_slider else 256
+                            
+                            try:
+                                # Run in a separate thread to avoid blocking UI
+                                import threading
+                                
+                                def generate_task():
+                                    # Save current recording to temporary MIDI
+                                    temp_midi_path = os.path.join(recorder.recordings_dir, "temp_recording.mid")
+                                    recorder.save_midi_recording(output_path=temp_midi_path, anchor_note=anchor_note)
+                                    
+                                    # Initialize AI if not already
+                                    if not hasattr(recorder, 'ai_composer') or recorder.ai_composer is None:
+                                        from ai_composer import AIComposer
+                                        recorder.ai_composer = AIComposer()
+                                    
+                                    # Process recording and generate continuation
+                                    encoded_input = recorder.ai_composer.process_user_recording(temp_midi_path)
+                                    
+                                    generated_output = recorder.ai_composer.generate_continuation(
+                                        encoded_input, temperature=temperature, 
+                                        top_k=100, max_new_tokens=max_tokens
+                                    )
+                                    
+                                    # Store results
+                                    recorder.current_continuation = generated_output
+                                    
+                                    # Create combined MIDI
+                                    combined_path = os.path.join(recorder.recordings_dir, "ai_continuation.mid")
+                                    recorder.ai_composer.create_combined_midi(
+                                        encoded_input, generated_output, combined_path
+                                    )
+                                    
+                                    # Update UI from main thread
+                                    nonlocal ai_generation_active
+                                    ai_generation_active = False
+                                    buttons[3].is_active = False
+                                    
+                                    if status:
+                                        status.set_message("AI continuation ready! Press PLAY to listen.", (100, 255, 100))
+                                    
+                                    # Load for playback
+                                    midi_player.load_midi(combined_path)
+                                    
+                                # Start generation thread
+                                threading.Thread(target=generate_task).start()
+                                
+                            except Exception as e:
+                                ai_generation_active = False
+                                buttons[3].is_active = False
+                                if status:
+                                    status.set_message(f"Error generating: {str(e)}", (255, 100, 100))
+                    
+                    elif buttons[4].is_clicked(pos):  # Accept button
+                        if not hasattr(recorder, 'current_continuation') or not recorder.current_continuation:
+                            if status:
+                                status.set_message("Generate a continuation first!", (255, 100, 100))
+                        else:
+                            try:
+                                # Save combined MIDI as final composition
+                                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                                final_path = os.path.join(recorder.recordings_dir, f"composition_{timestamp}.mid")
+                                
+                                # Copy the current combined file (or save it again)
+                                combined_path = os.path.join(recorder.recordings_dir, "ai_continuation.mid")
+                                shutil.copy(combined_path, final_path)
+                                
+                                if status:
+                                    status.set_message(f"Composition saved to {os.path.basename(final_path)}", (100, 255, 100))
+                            except Exception as e:
+                                if status:
+                                    status.set_message(f"Error saving: {str(e)}", (255, 100, 100))
+                    
+                    elif buttons[5].is_clicked(pos):  # Retry button
+                        if not recorder.midi_notes:
+                            if status:
+                                status.set_message("Record something first!", (255, 100, 100))
+                        else:
+                            # Similar to generate but with different parameters for variety
+                            if status:
+                                status.set_message("Generating new AI continuation...", (220, 160, 40))
+                            
+                            # Show active state
+                            buttons[5].is_active = True
+                            ai_generation_active = True
+                            
+                            # Use slightly higher temperature for more variation
+                            temperature = min(1.2, temp_slider.value + 0.1) if temp_slider else 1.0
+                            max_tokens = int(tokens_slider.value) if tokens_slider else 256
+                            
+                            try:
+                                # Similar generation logic as the generate button
+                                import threading
+                                
+                                def retry_task():
+                                    # Save current recording to temporary MIDI
+                                    temp_midi_path = os.path.join(recorder.recordings_dir, "temp_recording.mid")
+                                    recorder.save_midi_recording(output_path=temp_midi_path, anchor_note=anchor_note)
+                                    
+                                    # Initialize AI if not already
+                                    if not hasattr(recorder, 'ai_composer') or recorder.ai_composer is None:
+                                        from ai_composer import AIComposer
+                                        recorder.ai_composer = AIComposer()
+                                    
+                                    # Process recording and generate continuation
+                                    encoded_input = recorder.ai_composer.process_user_recording(temp_midi_path)
+                                    
+                                    generated_output = recorder.ai_composer.generate_continuation(
+                                        encoded_input, temperature=temperature, 
+                                        top_k=150,  # Higher top_k for more diversity
+                                        max_new_tokens=max_tokens
+                                    )
+                                    
+                                    # Store results
+                                    recorder.current_continuation = generated_output
+                                    
+                                    # Create combined MIDI
+                                    combined_path = os.path.join(recorder.recordings_dir, "ai_continuation.mid")
+                                    recorder.ai_composer.create_combined_midi(
+                                        encoded_input, generated_output, combined_path
+                                    )
+                                    
+                                    # Update UI from main thread
+                                    nonlocal ai_generation_active
+                                    ai_generation_active = False
+                                    buttons[5].is_active = False
+                                    
+                                    if status:
+                                        status.set_message("New AI continuation ready! Press PLAY to listen.", (220, 160, 40))
+                                    
+                                    # Load for playback
+                                    midi_player.load_midi(combined_path)
+                                    
+                                # Start generation thread
+                                threading.Thread(target=retry_task).start()
+                                
+                            except Exception as e:
+                                ai_generation_active = False
+                                buttons[5].is_active = False
+                                if status:
+                                    status.set_message(f"Error generating: {str(e)}", (255, 100, 100))
+                    
+                    # Check playback controls
+                    elif buttons[6].is_clicked(pos):  # Play button
+                        midi_player.play()
+                    
+                    elif buttons[7].is_clicked(pos):  # Pause button
+                        midi_player.pause()
+                
+            # Handle slider motion events
+            elif event.type == pygame.MOUSEMOTION:
+                # Update sliders during mouse motion for smoother dragging experience
+                if temp_slider:
+                    temp_slider.handle_event(event)
+                if tokens_slider:
+                    tokens_slider.handle_event(event)
+            
+            # For MOUSEBUTTONUP events:
+            elif event.type == pygame.MOUSEBUTTONUP:
+                # Make sure to update slider dragging state
+                if temp_slider:
+                    temp_slider.handle_event(event)
+                if tokens_slider:
+                    tokens_slider.handle_event(event)
+
+            # For MOUSEMOTION events:
+            elif event.type == pygame.MOUSEMOTION:
+                # Update slider dragging and hovering
+                if temp_slider:
+                    temp_slider.handle_event(event)
+                if tokens_slider:
+                    tokens_slider.handle_event(event)
         
         # Redraw screen
         screen.fill((20, 20, 25))  # Dark blue-gray background
@@ -701,21 +1244,24 @@ def play_until_user_exits(
         # Draw keyboard
         keyboard.draw(screen)
         
-        # Draw UI panel with all buttons
+        # Draw UI panels with all buttons
         if panel:
             panel.draw(screen)
-        else:
-            # Fallback if not using panel
-            for button in buttons:
-                button.draw(screen)
         
-        # Display status message - positioned further below buttons in a dedicated area
+        if ai_panel:
+            ai_panel.draw(screen)
+        
+        # Draw sliders
+        if temp_slider:
+            temp_slider.draw(screen)
+        
+        if tokens_slider:
+            tokens_slider.draw(screen)
+        
+        # Display status message
         if status:
-            # Center status message horizontally and position below buttons with more spacing
-            text_surface = status.font.render(status.message, True, status.color)
-            text_width = text_surface.get_width()
-            status_x = (screen.get_width() - text_width) // 2
-            status_y = keyboard.rect.height + 105  # Increased spacing below the buttons
+            status_x = (screen.get_width() - 300) // 2  # Center the status message
+            status_y = ai_panel.rect.y + ai_panel.rect.height - 40  # Position at bottom of AI panel
             status.draw(screen, (status_x, status_y))
         
         # Update and draw recording indicator if recording
@@ -730,12 +1276,12 @@ def play_until_user_exits(
                 if recording_indicator_size <= 8:
                     recording_indicator_growing = True
             
-            # Draw animated recording indicator - adjusted to match new button position
+            # Draw animated recording indicator
             indicator_x = screen.get_width() - 40
             indicator_y = keyboard.rect.height + 40
             
             # Pulsating transparent circle behind
-            pulse_surface = Surface((30, 30), pygame.SRCALPHA)
+            pulse_surface = pygame.Surface((30, 30), pygame.SRCALPHA)
             pygame.gfxdraw.filled_circle(
                 pulse_surface, 
                 15, 
@@ -756,6 +1302,31 @@ def play_until_user_exits(
             rec_text = rec_font.render("REC", True, (255, 255, 255))
             screen.blit(rec_text, (indicator_x - 40, indicator_y - 8))
             
+        # Draw AI generation loading indicator if active
+        if ai_generation_active:
+            # Draw loading spinner in the center of the AI panel
+            spinner_x = screen.get_width() // 2
+            spinner_y = ai_panel.rect.y + (ai_panel.rect.height // 2)
+            
+            # Spinning animation
+            current_time = pygame.time.get_ticks()
+            angle = (current_time % 1000) / 1000 * 360
+            
+            spinner_radius = 20
+            for i in range(8):
+                dot_angle = angle + i * 45
+                dot_x = spinner_x + int(math.cos(math.radians(dot_angle)) * spinner_radius)
+                dot_y = spinner_y + int(math.sin(math.radians(dot_angle)) * spinner_radius)
+                
+                # Fade out dots based on position in spin
+                alpha = 255 - ((i * 25) % 255)
+                pygame.gfxdraw.filled_circle(screen, dot_x, dot_y, 4, (100, 180, 255, alpha))
+            
+            # "Generating..." text
+            gen_font = pygame.font.SysFont("Arial", 16, bold=True)
+            gen_text = gen_font.render("Generating AI Continuation...", True, (200, 200, 255))
+            screen.blit(gen_text, (spinner_x - gen_text.get_width() // 2, spinner_y + 30))
+            
         pygame.display.update()
         
         # Cap the frame rate
@@ -763,7 +1334,6 @@ def play_until_user_exits(
 
     pygame.quit()
     print("Goodbye")
-
 class NoteRecorder:
     def __init__(self, framerate_hz, channels, tones):
         self.recording = False
@@ -775,10 +1345,52 @@ class NoteRecorder:
         self.channels = channels
         self.start_time = 0
         self.tones = tones  # Store the tone values for MIDI conversion
-        
+        self.ai_composer = None  # Will be initialized on demand
+        self.current_continuation = None
+        self.combined_midi_path = None
         # Ensure recordings directory exists
         self.recordings_dir = os.path.join(CURRENT_WORKING_DIR, RECORDINGS_FOLDER)
         os.makedirs(self.recordings_dir, exist_ok=True)
+
+    def initialize_ai(self):
+        """Lazy initialization of AI composer"""
+        if self.ai_composer is None:
+            from pianoputer.ai_composer import AIComposer
+            self.ai_composer = AIComposer()
+            
+    def generate_continuation(self, temperature=0.9, top_k=100, max_tokens=256):
+        """Generate AI continuation for current recording"""
+        self.initialize_ai()
+        
+        # Save current recording to temporary MIDI
+        temp_midi_path = os.path.join(self.recordings_dir, "temp_recording.mid")
+        self.save_midi_recording(output_path=temp_midi_path)
+        
+        # Process recording for model input
+        encoded_input = self.ai_composer.process_user_recording(temp_midi_path)
+        
+        # Generate continuation
+        generated_output = self.ai_composer.generate_continuation(
+            encoded_input, temperature, top_k, max_tokens)
+        
+        # Save the continuation
+        self.current_continuation = generated_output
+        
+        # Create combined MIDI
+        self.combined_midi_path = os.path.join(self.recordings_dir, "combined_recording.mid")
+        self.ai_composer.create_combined_midi(
+            encoded_input, generated_output, self.combined_midi_path)
+        
+        return self.combined_midi_path
+        
+    def accept_continuation(self):
+        """Accept and save the current AI continuation"""
+        if self.current_continuation:
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            final_path = os.path.join(self.recordings_dir, f"composition_{timestamp}.mid")
+            shutil.copy(self.combined_midi_path, final_path)
+            return final_path
+        return None
     
     def start_recording(self):
         self.recording = True
@@ -981,19 +1593,22 @@ def play_pianoputer(args: Optional[List[str]] = None):
         wav_path, framerate_hz, channels, tones, clear_cache, keys
     )
 
-    # Update this line to unpack all 5 return values
-    screen, keyboard, buttons, panel, status = configure_pygame_audio_and_set_ui(
+    # Unpack all 8 return values
+    screen, keyboard, buttons, panel, ai_panel, status, temp_slider, tokens_slider = configure_pygame_audio_and_set_ui(
         framerate_hz, channels, keyboard_path, color_to_key, key_color, key_txt_color
     )
+    
     print(
         "Ready for you to play!\n"
         "Press the keys on your keyboard. Use the buttons to record your performance.\n"
         "You can save as WAV audio or MIDI file.\n"
         "To exit press ESC or close the pygame window"
     )
-    # Update this line to pass panel and status to play_until_user_exits
+    
+    # Pass all parameters to play_until_user_exits
     play_until_user_exits(keys, list(key_sounds), keyboard, screen, buttons, 
-                          framerate_hz, channels, tones, anchor_note, panel, status)
+                          framerate_hz, channels, tones, anchor_note, panel, ai_panel, status,
+                          temp_slider, tokens_slider)
 
 
 if __name__ == "__main__":
