@@ -1,5 +1,6 @@
 #!/usr/bin/env python
-
+import matplotlib.pyplot as plt
+import pretty_midi
 import argparse
 import codecs
 import os
@@ -1509,8 +1510,8 @@ def configure_pygame_audio_and_set_ui(
     ai_panel_height = 300  # Make taller to fit sliders and controls properly
     
     screen_width = max(keyboard.rect.width, 800)  # Ensure minimum width
-    screen_height = keyboard.rect.height + control_panel_height + ai_panel_height + 30  # Extra spacing
-    
+    screen_height = keyboard.rect.height + control_panel_height + ai_panel_height + 250  # Add extra space (250px) for piano roll
+
     screen = pygame.display.set_mode((screen_width, screen_height))
     
     # Dark background
@@ -1720,6 +1721,49 @@ def play_until_user_exits(
     # Initialize MIDI player
     midi_player = MIDIPlayer(status_callback=status.set_message if status else None)
     
+    # Piano roll image placeholder
+    piano_roll_image = None
+    
+    # Function to update piano roll visualization
+    def update_piano_roll_image(midi_path):
+        nonlocal piano_roll_image
+        if not os.path.exists(midi_path):
+            return False
+            
+        try:
+            # Load MIDI file into PrettyMIDI object
+            midi_data = pretty_midi.PrettyMIDI(midi_path)
+            
+            # Create a temporary file path for the image
+            image_path = os.path.join(recorder.recordings_dir, "temp_piano_roll.png")
+            
+            # Retrieve piano roll and save as image
+            piano_roll = midi_data.get_piano_roll()
+            plt.figure(figsize=(10, 3))
+            plt.imshow(piano_roll, aspect='auto', cmap='Blues_r', origin='lower')
+            plt.title("MIDI Piano Roll")
+            plt.tight_layout()
+            plt.savefig(image_path)
+            plt.close()
+            
+            # Load the image into pygame and scale it
+            piano_roll_image = pygame.image.load(image_path)
+            piano_roll_image = pygame.transform.scale(
+                piano_roll_image, 
+                (screen.get_width() - 40, 200)
+            )
+            
+            if status:
+                status.set_message("Piano roll updated", (100, 200, 255))
+                
+            return True
+            
+        except Exception as e:
+            print(f"Error generating piano roll: {e}")
+            if status:
+                status.set_message(f"Error creating piano roll: {str(e)}", (255, 100, 100))
+            return False
+    
     # Create recording indicator animation variables
     recording_indicator_size = 10
     recording_indicator_alpha = 255
@@ -1818,10 +1862,13 @@ def play_until_user_exits(
                         buttons[0].is_active = False
                         buttons[1].is_active = True
                         
+                    # In the Save MIDI button click handler (around line 2930):
                     elif buttons[2].is_clicked(pos):  # Save MIDI button
                         if recorder.save_midi_recording(anchor_note):
                             if status:
                                 status.set_message(f"MIDI recording saved to {RECORDINGS_FOLDER}", (100, 100, 255))
+                            # Add this line to update piano roll
+                            update_piano_roll_image(recorder.midi_file_path)
                         else:
                             if status:
                                 status.set_message("No recording to save", (255, 100, 100))
@@ -1873,6 +1920,7 @@ def play_until_user_exits(
                                     recorder.ai_composer.create_combined_midi(
                                         encoded_input, generated_output, combined_path
                                     )
+                                    update_piano_roll_image(combined_path)
                                     
                                     # Update UI from main thread
                                     nonlocal ai_generation_active
@@ -2051,7 +2099,8 @@ def play_until_user_exits(
         # Display status message
         if status:
             status_x = (screen.get_width() - 300) // 2  # Center the status message
-            status_y = ai_panel.rect.y + ai_panel.rect.height - 40  # Position at bottom of AI panel
+            # Position it above the piano roll
+            status_y = ai_panel.rect.y + ai_panel.rect.height - 40  # At the bottom of AI panel
             status.draw(screen, (status_x, status_y))
         
         # Draw AI generation loading indicator if active
@@ -2092,6 +2141,29 @@ def play_until_user_exits(
             rec_text = rec_font.render("● REC", True, (255, 50, 50))
             rec_text.set_alpha(alpha)
             screen.blit(rec_text, (rec_x, rec_y))
+            
+        if piano_roll_image:
+            # Position it in the newly created space at the bottom
+            piano_roll_rect = piano_roll_image.get_rect()
+            piano_roll_rect.centerx = screen.get_rect().centerx
+            
+            # Place it below the AI panel
+            ai_panel_bottom = ai_panel.rect.y + ai_panel.rect.height
+            piano_roll_rect.top = ai_panel_bottom + 20  # 20px margin
+            
+            # Draw a background panel for the piano roll
+            bg_rect = piano_roll_rect.inflate(20, 20)
+            pygame.draw.rect(screen, (25, 27, 35), bg_rect, border_radius=10)
+            pygame.draw.rect(screen, (60, 65, 70), bg_rect, width=1, border_radius=10)
+            
+            # Draw a title for the piano roll
+            roll_title_font = pygame.font.SysFont("Arial", 16, bold=True)
+            roll_title = roll_title_font.render("MIDI Piano Roll", True, (220, 220, 230))
+            # roll_title_rect = roll_title.get_rect(centerx=piano_roll_rect.centerx, bottom=piano_roll_rect.top - 8)
+            # screen.blit(roll_title, roll_title_rect)
+            
+            # Draw the image
+            screen.blit(piano_roll_image, piano_roll_rect)
                     
         pygame.display.update()
         
@@ -2102,6 +2174,7 @@ def play_until_user_exits(
     print("Goodbye")
 class NoteRecorder:
     def __init__(self, framerate_hz, channels, tones):
+        self.midi_file_path = None  # Add this to track the current MIDI file
         self.recording = False
         self.notes = []  # List of (key, sound, start_time, duration)
         self.midi_notes = []  # List of (tone, start_time, duration)
@@ -2261,15 +2334,14 @@ class NoteRecorder:
         print(f"WAV recording saved to: {filepath}")
         return True
     
-    def save_midi_recording(self, anchor_note=None):
+    def save_midi_recording(self, anchor_note=None, output_path=None):
         if not self.midi_notes:
             print("No MIDI notes to save.")
             return False
-        
-        # Create a timestamp for the filename
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"pianoputer_midi_{timestamp}.mid"
-        filepath = os.path.join(self.recordings_dir, filename)
+        if not output_path:
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"pianoputer_midi_{timestamp}.mid"
+            output_path = os.path.join(self.recordings_dir, filename)
         
         # Create a new MIDI file with one track
         mid = mido.MidiFile()
@@ -2315,8 +2387,9 @@ class NoteRecorder:
                 last_time = start_ticks + duration_ticks
         
         # Save the MIDI file
-        mid.save(filepath)
-        print(f"MIDI recording saved to: {filepath}")
+        mid.save(output_path)
+        self.midi_file_path = output_path
+        print(f"MIDI recording saved to: {output_path}")
         return True
 
 def get_audio_data(wav_path: str) -> Tuple:
