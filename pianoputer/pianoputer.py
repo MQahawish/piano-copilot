@@ -206,26 +206,36 @@ def get_keyboard_info(keyboard_file: str):
 
 
 class Button:
-    def __init__(self, x, y, width, height, color, text, icon=None, text_color=WHITE, 
-                 font_size=16, border_radius=8):
+    def __init__(self, x, y, width, height, color, text, icon=None, text_color=(255, 255, 255, 255), 
+                 font_size=16, border_radius=12, icon_size=20):
         self.rect = pygame.Rect(x, y, width, height)
         self.color = color
-        self.hover_color = self._get_hover_color(color)
-        self.active_color = self._get_active_color(color)
         self.text = text
         self.text_color = text_color
-        self.font_size = font_size
-        self.font = pygame.font.SysFont("Arial", font_size, bold=True)
-        self.border_radius = border_radius
         self.icon = icon
         self.is_active = False
         self.is_hovering = False
-        self.shadow_offset = 3
+        
+        # Modern design properties
+        self.border_radius = border_radius
+        self.font_name = "Inter" if "Inter" in pygame.font.get_fonts() else "Arial"
+        self.font = pygame.font.SysFont(self.font_name, font_size, bold=False)
+        self.icon_size = icon_size
+        self.shadow_offset = 2
+        self.shadow_alpha = 120
+        self.glow_alpha = 0
+        self.animation_speed = 0.2
+        self.animation_progress = 0
+        
+        # Calculate different color variations for states
+        self.hover_color = self._get_hover_color(color)
+        self.active_color = self._get_active_color(color)
+        self.current_color = self.color
         
     def _get_hover_color(self, color):
         """Return a slightly lighter version of the color for hover state"""
         r, g, b = color[:3]
-        factor = 1.1
+        factor = 1.15
         return (min(int(r * factor), 255), 
                 min(int(g * factor), 255), 
                 min(int(b * factor), 255), 
@@ -234,54 +244,99 @@ class Button:
     def _get_active_color(self, color):
         """Return a slightly darker version of the color for active state"""
         r, g, b = color[:3]
-        factor = 0.8
+        factor = 0.85
         return (int(r * factor), 
                 int(g * factor), 
                 int(b * factor), 
                 color[3] if len(color) > 3 else 255)
+    
+    def update(self, mouse_pos, dt=1/60):
+        """Update button state and animations based on mouse position"""
+        prev_hovering = self.is_hovering
+        self.is_hovering = self.rect.collidepoint(mouse_pos)
         
+        # Animate color changes for smoother transitions
+        target_color = self.active_color if self.is_active else (
+                    self.hover_color if self.is_hovering else self.color)
+        
+        # Animate glow effect when hovering begins
+        if not prev_hovering and self.is_hovering:
+            self.glow_alpha = 60  # Start glow effect
+        
+        # Fade out glow effect
+        if self.glow_alpha > 0:
+            self.glow_alpha = max(0, self.glow_alpha - 120 * dt)
+            
+        # Smooth color transition
+        self.current_color = self._interpolate_color(self.current_color, target_color, self.animation_speed)
+        
+        # Update pulse animation for recording button
+        if self.icon == "record" and self.is_active:
+            self.animation_progress = (self.animation_progress + 3 * dt) % 1.0
+    
+    def _interpolate_color(self, color1, color2, fraction):
+        """Smoothly interpolate between two colors"""
+        r1, g1, b1 = color1[:3]
+        r2, g2, b2 = color2[:3]
+        
+        r = int(r1 + (r2 - r1) * fraction)
+        g = int(g1 + (g2 - g1) * fraction)
+        b = int(b1 + (b2 - b1) * fraction)
+        
+        alpha = color1[3] if len(color1) > 3 else 255
+        return (r, g, b, alpha)
+    
     def draw(self, screen):
-        # Determine current color based on state
-        current_color = self.active_color if self.is_active else (
-                       self.hover_color if self.is_hovering else self.color)
-        
-        # Draw shadow
+        # Draw subtle shadow
         shadow_rect = self.rect.copy()
         shadow_rect.y += self.shadow_offset
-        self._draw_rounded_rect(screen, shadow_rect, (30, 30, 30, 180), self.border_radius)
+        shadow_rect.x += self.shadow_offset // 2
+        self._draw_rounded_rect(screen, shadow_rect, (20, 20, 30, self.shadow_alpha), self.border_radius)
         
-        # Draw button
-        self._draw_rounded_rect(screen, self.rect, current_color, self.border_radius)
+        # Draw glow effect when hovering (for extra polish)
+        if self.glow_alpha > 0:
+            glow_rect = self.rect.copy()
+            glow_rect.inflate_ip(6, 6)
+            self._draw_rounded_rect(screen, glow_rect, 
+                                  (self.color[0], self.color[1], self.color[2], self.glow_alpha), 
+                                  self.border_radius + 3)
         
-        # Draw button border
-        pygame.draw.rect(screen, (200, 200, 200, 100), self.rect, 1, border_radius=self.border_radius)
+        # Draw main button with current interpolated color
+        self._draw_rounded_rect(screen, self.rect, self.current_color, self.border_radius)
         
-        # Calculate text position
-        text_surface = self.font.render(self.text, True, self.text_color)
-        
+        # Calculate text and icon positions
         if self.icon:
-            # If there's an icon, position text to its right
-            icon_size = 24
-            icon_padding = 8
-            total_width = icon_size + icon_padding + text_surface.get_width()
+            # If there's an icon, position both icon and text
+            icon_padding = 10
             
-            icon_x = self.rect.centerx - total_width // 2
-            icon_y = self.rect.centery - icon_size // 2
-            
-            # Draw icon
-            self._draw_icon(screen, icon_x, icon_y, icon_size, self.icon)
-            
-            # Draw text
-            text_x = icon_x + icon_size + icon_padding
-            text_y = self.rect.centery - text_surface.get_height() // 2
-            screen.blit(text_surface, (text_x, text_y))
+            if len(self.text) > 0:
+                # Show both icon and text
+                text_surface = self.font.render(self.text, True, self.text_color)
+                total_width = self.icon_size + icon_padding + text_surface.get_width()
+                
+                icon_x = self.rect.centerx - total_width // 2
+                icon_y = self.rect.centery - self.icon_size // 2
+                
+                # Draw icon
+                self._draw_icon(screen, icon_x, icon_y, self.icon_size)
+                
+                # Draw text
+                text_x = icon_x + self.icon_size + icon_padding
+                text_y = self.rect.centery - text_surface.get_height() // 2
+                screen.blit(text_surface, (text_x, text_y))
+            else:
+                # Icon only button (centered)
+                icon_x = self.rect.centerx - self.icon_size // 2
+                icon_y = self.rect.centery - self.icon_size // 2
+                self._draw_icon(screen, icon_x, icon_y, self.icon_size)
         else:
-            # Center text if no icon
+            # Text only button
+            text_surface = self.font.render(self.text, True, self.text_color)
             text_rect = text_surface.get_rect(center=self.rect.center)
             screen.blit(text_surface, text_rect)
     
     def _draw_rounded_rect(self, surface, rect, color, radius):
-        """Draw a rectangle with rounded corners"""
+        """Draw a rectangle with rounded corners using pygame.gfxdraw for anti-aliasing"""
         if radius <= 0:
             pygame.draw.rect(surface, color, rect)
             return
@@ -299,63 +354,188 @@ class Button:
         pygame.gfxdraw.filled_circle(surface, x + radius, y + height - radius - 1, radius, color)
         pygame.gfxdraw.filled_circle(surface, x + width - radius - 1, y + height - radius - 1, radius, color)
     
-    def _draw_icon(self, screen, x, y, size, icon_type):
-        """Draw different icons based on type"""
-        if icon_type == "record":
-            # Drawing a record circle
-            pygame.gfxdraw.filled_circle(screen, x + size//2, y + size//2, size//2 - 2, (255, 0, 0))
-            pygame.gfxdraw.aacircle(screen, x + size//2, y + size//2, size//2 - 2, (255, 0, 0))
-        
-        elif icon_type == "stop":
-            # Drawing a stop square
-            stop_rect = pygame.Rect(x + 4, y + 4, size - 8, size - 8)
-            pygame.draw.rect(screen, WHITE, stop_rect)
-        
-        elif icon_type == "save_wav":
-            # Drawing a waveform icon
-            wave_points = []
-            for i in range(size):
-                wave_points.append((x + i, y + size//2 + int(math.sin(i/2) * size//4)))
+    def _draw_icon(self, screen, x, y, size):
+        """Draw modern styled icons based on type"""
+        if self.icon == "record":
+            # Modern recording icon - filled circle with pulsating ring
+            color = (255, 80, 80)  # Brighter red for modern look
+            center_x, center_y = x + size//2, y + size//2
             
-            pygame.draw.lines(screen, WHITE, False, wave_points, 2)
+            # Add pulsating animation when active
+            if self.is_active:
+                # Use animation_progress for smooth pulsating
+                pulse_factor = 0.5 + 0.5 * abs(math.sin(self.animation_progress * math.pi * 2))
+                
+                # Draw pulsating outer glow
+                outer_size = int((size//2) * (1 + pulse_factor * 0.5))
+                for r in range(outer_size, size//2 - 4, -1):
+                    alpha = int(100 * (1 - (r - size//2 + 4) / (outer_size - size//2 + 4)))
+                    pygame.gfxdraw.aacircle(screen, center_x, center_y, r, (255, 0, 0, alpha))
+            
+            # Inner filled circle
+            pygame.gfxdraw.filled_circle(screen, center_x, center_y, size//2 - 4, color)
+            pygame.gfxdraw.aacircle(screen, center_x, center_y, size//2 - 4, color)
         
-        elif icon_type == "save_midi":
-            # Drawing a simple piano keys icon
+        elif self.icon == "stop":
+            # Modern stop icon - rounded square
+            color = (255, 255, 255)
+            stop_rect = pygame.Rect(x + 4, y + 4, size - 8, size - 8)
+            pygame.draw.rect(screen, color, stop_rect, border_radius=2)
+        
+        elif self.icon == "play":
+            # Modern play triangle
+            color = (120, 220, 120)
+            points = [
+                (x + 4, y + 2),
+                (x + 4, y + size - 2),
+                (x + size - 2, y + size//2)
+            ]
+            pygame.gfxdraw.filled_polygon(screen, points, color)
+            pygame.gfxdraw.aapolygon(screen, points, color)
+        
+        elif self.icon == "pause":
+            # Modern pause icon - two rounded bars
+            color = (255, 255, 255)
+            bar_width = (size - 12) // 2
+            pygame.draw.rect(screen, color, (x + 4, y + 4, bar_width, size - 8), border_radius=2)
+            pygame.draw.rect(screen, color, (x + 8 + bar_width, y + 4, bar_width, size - 8), border_radius=2)
+        
+        elif self.icon == "save_midi":
+            # Modern MIDI icon - simplified piano keys
+            # White keys
+            keys_color = (255, 255, 255)
             key_width = size // 4
             white_key_height = size - 6
-            black_key_height = white_key_height * 0.6
             
-            # Draw white keys
             for i in range(3):
-                pygame.draw.rect(screen, WHITE, 
-                                (x + i * key_width + 2, y + 3, 
-                                 key_width - 1, white_key_height))
+                pygame.draw.rect(screen, keys_color, 
+                                (x + i * key_width + 3, y + 3, 
+                                 key_width - 1, white_key_height),
+                                border_radius=2)
             
-            # Draw black keys
+            # Black keys
+            black_key_height = white_key_height * 0.6
             pygame.draw.rect(screen, (40, 40, 40), 
                             (x + key_width * 0.7, y + 3, 
-                             key_width * 0.6, black_key_height))
+                             key_width * 0.6, black_key_height),
+                            border_radius=1)
             pygame.draw.rect(screen, (40, 40, 40), 
                             (x + key_width * 1.7, y + 3, 
-                             key_width * 0.6, black_key_height))
+                             key_width * 0.6, black_key_height),
+                            border_radius=1)
         
-    def update(self, mouse_pos):
-        """Update button state based on mouse position"""
-        self.is_hovering = self.rect.collidepoint(mouse_pos)
+        elif self.icon == "generate":
+            # AI generation icon (stylized sparkle/brain)
+            color = (130, 180, 255)
+            
+            # Draw a stylized sparkle/star
+            center_x, center_y = x + size//2, y + size//2
+            outer_radius = size//2 - 2
+            inner_radius = outer_radius // 2
+            
+            points = []
+            for i in range(8):
+                angle = i * (2 * math.pi / 8)
+                radius = outer_radius if i % 2 == 0 else inner_radius
+                points.append((
+                    center_x + int(radius * math.cos(angle)),
+                    center_y + int(radius * math.sin(angle))
+                ))
+            
+            pygame.gfxdraw.filled_polygon(screen, points, color)
+            pygame.gfxdraw.aapolygon(screen, points, color)
         
+        elif self.icon == "accept":
+            # Checkmark icon
+            color = (100, 220, 100)
+            
+            # Draw checkmark
+            points = [
+                (x + 4, y + size//2),
+                (x + size//3, y + size - 6),
+                (x + size - 4, y + 4)
+            ]
+            
+            # Draw with anti-aliasing
+            pygame.gfxdraw.aapolygon(screen, points, color)
+            
+            # Draw lines with thickness
+            pygame.draw.lines(screen, color, False, points, 2)
+        
+        elif self.icon == "retry":
+            # Retry/refresh icon
+            color = (220, 180, 40)
+            
+            # Draw circular arrow
+            center_x, center_y = x + size//2, y + size//2
+            radius = size//2 - 4
+            
+            # Arc positions (in radians)
+            start_angle = math.pi * 0.1
+            end_angle = math.pi * 1.9
+            
+            # Draw the arc
+            points = []
+            for i in range(20):
+                angle = start_angle + (end_angle - start_angle) * (i / 19)
+                points.append((
+                    center_x + int(radius * math.cos(angle)),
+                    center_y + int(radius * math.sin(angle))
+                ))
+            
+            # Draw the arc with anti-aliasing
+            pygame.draw.lines(screen, color, False, points, 2)
+            
+            # Arrow head
+            arrow_size = 4
+            pygame.draw.polygon(screen, color, [
+                (points[-1][0], points[-1][1]),
+                (points[-1][0] - arrow_size, points[-1][1] - arrow_size),
+                (points[-1][0] + arrow_size, points[-1][1] - arrow_size)
+            ])
+    
     def is_clicked(self, pos):
         return self.rect.collidepoint(pos)
-
+    
+    def set_active(self, active):
+        self.is_active = active
 
 class UIPanel:
-    def __init__(self, x, y, width, height, bg_color=(30, 30, 30)):
+    def __init__(self, x, y, width, height, bg_color=(30, 32, 36), 
+                 border_color=None, title=None, title_color=(255, 255, 255)):
         self.rect = pygame.Rect(x, y, width, height)
         self.bg_color = bg_color
         self.elements = []
-        self.title = None
-        self.title_font = pygame.font.SysFont("Arial", 18, bold=True)
+        self.title = title
+        self.title_color = title_color
         
-    def set_title(self, title, color=WHITE):
+        # Calculate border color from background if not specified
+        if border_color is None:
+            # Make border slightly lighter than background
+            r, g, b = bg_color[:3]
+            factor = 1.3
+            self.border_color = (min(int(r * factor), 255),
+                                min(int(g * factor), 255),
+                                min(int(b * factor), 255),
+                                100)  # Semi-transparent
+        else:
+            self.border_color = border_color
+            
+        # Modern UI properties
+        self.font_name = "Inter" if "Inter" in pygame.font.get_fonts() else "Arial"
+        self.title_font = pygame.font.SysFont(self.font_name, 18, bold=True)
+        self.border_radius = 12
+        self.shadow_size = 5
+        self.shadow_alpha = 80
+        
+        # If there's a title, add padding at the top for it
+        self.content_rect = self.rect.copy()
+        if self.title:
+            title_height = 30
+            self.content_rect.y += title_height
+            self.content_rect.height -= title_height
+    
+    def set_title(self, title, color=(255, 255, 255)):
         self.title = title
         self.title_color = color
         
@@ -363,85 +543,281 @@ class UIPanel:
         self.elements.append(element)
         
     def draw(self, screen):
-        # Draw panel background with rounded corners
-        pygame.draw.rect(screen, self.bg_color, self.rect, border_radius=10)
+        # Draw shadow first
+        shadow_rect = self.rect.copy()
+        shadow_rect.inflate_ip(4, 4)
+        shadow_rect.move_ip(2, 2)
+        self._draw_rounded_rect(screen, shadow_rect, (10, 10, 15, self.shadow_alpha), self.border_radius)
         
-        # Draw panel border
-        pygame.draw.rect(screen, (100, 100, 100), self.rect, 1, border_radius=10)
+        # Draw panel background with rounded corners
+        self._draw_rounded_rect(screen, self.rect, self.bg_color, self.border_radius)
+        
+        # Draw subtle gradient overlay for depth (top lighter, bottom darker)
+        gradient_surface = pygame.Surface((self.rect.width, self.rect.height), pygame.SRCALPHA)
+        
+        # Create subtle gradient from top to bottom
+        for i in range(self.rect.height):
+            alpha = 10 - int(20 * (i / self.rect.height))  # Fade from light to dark
+            if alpha > 0:
+                pygame.draw.line(gradient_surface, (255, 255, 255, alpha), 
+                             (0, i), (self.rect.width, i))
+            else:
+                pygame.draw.line(gradient_surface, (0, 0, 0, -alpha), 
+                             (0, i), (self.rect.width, i))
+        
+        # Draw the gradient with rounded corners
+        self._draw_rounded_surface(screen, gradient_surface, self.rect.topleft, self.border_radius)
+        
+        # Draw panel border with rounded corners
+        pygame.draw.rect(screen, self.border_color, self.rect, 1, border_radius=self.border_radius)
         
         # Draw title if set
         if self.title:
             title_surface = self.title_font.render(self.title, True, self.title_color)
-            title_rect = title_surface.get_rect(midtop=(self.rect.centerx, self.rect.y + 5))
+            
+            # Create background for title area
+            title_height = 30
+            title_bg_rect = pygame.Rect(self.rect.x, self.rect.y, self.rect.width, title_height)
+            
+            # Draw rounded corners only at top
+            self._draw_top_rounded_rect(screen, title_bg_rect, 
+                                     (self.bg_color[0], self.bg_color[1], self.bg_color[2], 200), 
+                                     self.border_radius)
+            
+            # Position title centered
+            title_rect = title_surface.get_rect(
+                midtop=(self.rect.centerx, self.rect.y + 8)
+            )
             screen.blit(title_surface, title_rect)
+            
+            # Draw subtle separator line
+            separator_y = self.rect.y + title_height
+            pygame.draw.line(screen, self.border_color, 
+                          (self.rect.x + 10, separator_y), 
+                          (self.rect.right - 10, separator_y))
         
         # Draw all contained elements
         for element in self.elements:
             element.draw(screen)
+    
+    def _draw_rounded_rect(self, surface, rect, color, radius):
+        """Draw a rectangle with rounded corners using pygame.gfxdraw for anti-aliasing"""
+        if radius <= 0:
+            pygame.draw.rect(surface, color, rect)
+            return
+            
+        # Get the rectangle dimensions
+        x, y, width, height = rect
+        
+        # Draw the rectangle with rounded corners
+        pygame.gfxdraw.box(surface, (x + radius, y, width - 2 * radius, height), color)
+        pygame.gfxdraw.box(surface, (x, y + radius, width, height - 2 * radius), color)
+        
+        # Draw the four rounded corners
+        pygame.gfxdraw.filled_circle(surface, x + radius, y + radius, radius, color)
+        pygame.gfxdraw.filled_circle(surface, x + width - radius - 1, y + radius, radius, color)
+        pygame.gfxdraw.filled_circle(surface, x + radius, y + height - radius - 1, radius, color)
+        pygame.gfxdraw.filled_circle(surface, x + width - radius - 1, y + height - radius - 1, radius, color)
+    
+    def _draw_top_rounded_rect(self, surface, rect, color, radius):
+        """Draw a rectangle with rounded corners only at the top"""
+        if radius <= 0:
+            pygame.draw.rect(surface, color, rect)
+            return
+            
+        # Get the rectangle dimensions
+        x, y, width, height = rect
+        
+        # Draw the rectangle with rounded corners only at top
+        pygame.gfxdraw.box(surface, (x + radius, y, width - 2 * radius, height), color)
+        pygame.gfxdraw.box(surface, (x, y + radius, width, height - radius), color)
+        
+        # Draw the two top rounded corners
+        pygame.gfxdraw.filled_circle(surface, x + radius, y + radius, radius, color)
+        pygame.gfxdraw.filled_circle(surface, x + width - radius - 1, y + radius, radius, color)
+    
+    def _draw_rounded_surface(self, target_surface, surface, pos, radius):
+        """Draw a surface with rounded corners using a mask"""
+        # Create a mask surface 
+        mask = pygame.Surface((surface.get_width(), surface.get_height()), pygame.SRCALPHA)
+        self._draw_rounded_rect(mask, mask.get_rect(), (255, 255, 255), radius)
+        
+        # Apply the mask
+        masked_surface = surface.copy()
+        masked_surface.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+        
+        # Draw to target
+        target_surface.blit(masked_surface, pos)
+    
+    def update(self, mouse_pos):
+        """Update all elements in the panel"""
+        for element in self.elements:
+            if hasattr(element, 'update'):
+                element.update(mouse_pos)
+    
+    def handle_event(self, event):
+        """Handle events for all elements in the panel"""
+        for element in self.elements:
+            if hasattr(element, 'handle_event'):
+                if element.handle_event(event):
+                    return True
+        return False
 
-# Status message class for more elegant notifications
 class StatusMessage:
     def __init__(self):
         self.message = ""
-        self.color = WHITE
-        self.font = pygame.font.SysFont("Arial", 18, bold=True)  # Larger font size and bold
+        self.color = (255, 255, 255)
+        self.font_name = "Inter" if "Inter" in pygame.font.get_fonts() else "Arial"
+        self.font = pygame.font.SysFont(self.font_name, 16, bold=True)
         self.start_time = 0
         self.duration = 4  # seconds to display the message
-        self.fade_duration = 0.5  # seconds to fade out
-        self.background_color = (30, 30, 35, 180)  # Semi-transparent background
+        self.fade_duration = 0.8  # seconds to fade out
+        self.background_color = (40, 42, 48, 230)  # Dark, semi-transparent background
         
-    def set_message(self, message, color=WHITE):
+        # Animation properties
+        self.current_opacity = 0
+        self.target_opacity = 0
+        self.opacity_speed = 8  # Speed of fade in/out
+        self.slide_offset = 0
+        self.slide_target = 0
+        self.slide_speed = 10  # Speed of slide animation
+        
+    def set_message(self, message, color=(255, 255, 255)):
+        if message != self.message:
+            self.slide_offset = 10  # Start slide-in animation
+            self.slide_target = 0
+            
         self.message = message
         self.color = color
         self.start_time = time.time()
+        self.target_opacity = 255
         
-    def draw(self, screen, position):
+    def update(self, dt=1/60):
+        """Update animations"""
         if not self.message:
             return
             
         current_time = time.time()
         elapsed = current_time - self.start_time
         
-        # If the message has expired, clear it
+        # If the message has expired, start fade out
         if elapsed > self.duration:
+            self.target_opacity = 0
+        
+        # If completely faded out and expired, clear the message
+        if self.current_opacity <= 0 and elapsed > self.duration:
             self.message = ""
             return
             
-        # Calculate opacity for fade out
-        alpha = 255
-        if elapsed > (self.duration - self.fade_duration):
-            fade_percent = (elapsed - (self.duration - self.fade_duration)) / self.fade_duration
-            alpha = int(255 * (1 - fade_percent))
+        # Animate opacity
+        if self.current_opacity < self.target_opacity:
+            self.current_opacity = min(self.target_opacity, self.current_opacity + self.opacity_speed * 255 * dt)
+        elif self.current_opacity > self.target_opacity:
+            self.current_opacity = max(self.target_opacity, self.current_opacity - self.opacity_speed * 255 * dt)
+            
+        # Animate slide
+        if self.slide_offset > self.slide_target:
+            self.slide_offset = max(self.slide_target, self.slide_offset - self.slide_speed * dt * 60)
+        elif self.slide_offset < self.slide_target:
+            self.slide_offset = min(self.slide_target, self.slide_offset + self.slide_speed * dt * 60)
         
-        # Create a surface with per-pixel alpha
+    def draw(self, screen, position):
+        if not self.message or self.current_opacity <= 0:
+            return
+        
+        # Get message dimensions
         text_surface = self.font.render(self.message, True, self.color)
         text_rect = text_surface.get_rect()
         
-        # Create a background surface with padding
-        padding = 10
+        # Create a background surface with padding and rounded corners
+        padding = 12
+        bg_width = text_rect.width + padding * 2
+        bg_height = text_rect.height + padding * 1.5
+        
         bg_rect = pygame.Rect(
-            position[0] - padding // 2,
+            position[0] - padding + self.slide_offset,
             position[1] - padding // 2,
-            text_rect.width + padding,
-            text_rect.height + padding
+            bg_width,
+            bg_height
         )
         
         # Draw background with rounded corners
-        background = pygame.Surface((bg_rect.width, bg_rect.height), pygame.SRCALPHA)
-        pygame.draw.rect(
-            background, 
-            self.background_color, 
-            (0, 0, bg_rect.width, bg_rect.height), 
-            border_radius=5
+        rounded_rect_radius = 8
+        
+        # Background shadow for depth
+        shadow_offset = 2
+        shadow_rect = bg_rect.copy()
+        shadow_rect.x += shadow_offset
+        shadow_rect.y += shadow_offset
+        self._draw_rounded_rect(
+            screen, 
+            shadow_rect, 
+            (20, 20, 25, int(self.current_opacity * 0.5)), 
+            rounded_rect_radius
         )
-        background.set_alpha(alpha)
-        screen.blit(background, bg_rect.topleft)
         
-        # Apply the calculated alpha to text
-        text_surface.set_alpha(alpha)
+        # Main background
+        bg_color = self.background_color[:3] + (int(self.current_opacity * 0.9),)
+        self._draw_rounded_rect(screen, bg_rect, bg_color, rounded_rect_radius)
         
-        # Draw to screen
-        screen.blit(text_surface, position)
+        # Add subtle gradient for depth
+        gradient_surface = pygame.Surface((bg_rect.width, bg_rect.height), pygame.SRCALPHA)
+        for i in range(bg_rect.height):
+            alpha = 5 - int(10 * (i / bg_rect.height))  # Fade from light to dark
+            if alpha > 0:
+                pygame.draw.line(gradient_surface, (255, 255, 255, alpha * (self.current_opacity/255)), 
+                              (0, i), (bg_rect.width, i))
+        
+        # Apply rounded corners to gradient
+        self._draw_rounded_surface(screen, gradient_surface, bg_rect.topleft, rounded_rect_radius)
+        
+        # Draw text with current opacity
+        alpha_text = text_surface.copy()
+        alpha_text.set_alpha(int(self.current_opacity))
+        
+        # Adjusted text position (centered in background)
+        text_pos = (
+            bg_rect.centerx - text_rect.width // 2,
+            bg_rect.centery - text_rect.height // 2
+        )
+        
+        screen.blit(alpha_text, text_pos)
+        
+        # Add subtle border
+        border_color = (255, 255, 255, int(self.current_opacity * 0.2))
+        pygame.draw.rect(screen, border_color, bg_rect, 1, border_radius=rounded_rect_radius)
+    
+    def _draw_rounded_rect(self, surface, rect, color, radius):
+        """Draw a rectangle with rounded corners using pygame.gfxdraw"""
+        if radius <= 0:
+            pygame.draw.rect(surface, color, rect)
+            return
+            
+        # Get the rectangle dimensions
+        x, y, width, height = rect
+        
+        # Draw the rectangle with rounded corners
+        pygame.gfxdraw.box(surface, (x + radius, y, width - 2 * radius, height), color)
+        pygame.gfxdraw.box(surface, (x, y + radius, width, height - 2 * radius), color)
+        
+        # Draw the four rounded corners
+        pygame.gfxdraw.filled_circle(surface, x + radius, y + radius, radius, color)
+        pygame.gfxdraw.filled_circle(surface, x + width - radius - 1, y + radius, radius, color)
+        pygame.gfxdraw.filled_circle(surface, x + radius, y + height - radius - 1, radius, color)
+        pygame.gfxdraw.filled_circle(surface, x + width - radius - 1, y + height - radius - 1, radius, color)
+    
+    def _draw_rounded_surface(self, target_surface, surface, pos, radius):
+        """Draw a surface with rounded corners using a mask"""
+        # Create a mask surface 
+        mask = pygame.Surface((surface.get_width(), surface.get_height()), pygame.SRCALPHA)
+        self._draw_rounded_rect(mask, mask.get_rect(), (255, 255, 255), radius)
+        
+        # Apply the mask
+        masked_surface = surface.copy()
+        masked_surface.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+        
+        # Draw to target
+        target_surface.blit(masked_surface, pos)
 
 class MIDIPlayer:
     def __init__(self, status_callback=None):
@@ -449,15 +825,27 @@ class MIDIPlayer:
         self.playing = False
         self.status_callback = status_callback
         self.process = None
+        self.midi_directory = os.path.join(CURRENT_WORKING_DIR, RECORDINGS_FOLDER)
+        # Ensure directory exists
+        os.makedirs(self.midi_directory, exist_ok=True)
+        
+    def set_midi_directory(self, directory):
+        """Set the directory to look for MIDI files"""
+        if os.path.exists(directory) and os.path.isdir(directory):
+            self.midi_directory = directory
+            return True
+        return False
         
     def load_midi(self, midi_path):
         """Load a MIDI file for playback"""
         if not os.path.exists(midi_path):
             if self.status_callback:
-                self.status_callback("MIDI file not found", (255, 100, 100))
+                self.status_callback(f"MIDI file not found: {midi_path}", (255, 100, 100))
             return False
             
         self.current_midi = midi_path
+        if self.status_callback:
+            self.status_callback(f"Loaded: {os.path.basename(midi_path)}", (100, 255, 100))
         return True
         
     def play(self):
@@ -513,26 +901,354 @@ class MIDIPlayer:
         except Exception as e:
             if self.status_callback:
                 self.status_callback(f"Error pausing: {str(e)}", (255, 100, 100))
+    
+    def get_midi_files(self):
+        """Return a list of MIDI files in the directory"""
+        midi_files = []
+        try:
+            for file in os.listdir(self.midi_directory):
+                if file.lower().endswith('.mid') or file.lower().endswith('.midi'):
+                    full_path = os.path.join(self.midi_directory, file)
+                    midi_files.append((file, full_path))
+            return midi_files
+        except Exception as e:
+            if self.status_callback:
+                self.status_callback(f"Error reading MIDI directory: {str(e)}", (255, 100, 100))
+            return []
+
+class FileBrowser:
+    def __init__(self, x, y, width, height, directory=RECORDINGS_FOLDER, 
+                 file_extension=".mid", bg_color=(30, 32, 36), 
+                 file_selected_callback=None):
+        self.rect = pygame.Rect(x, y, width, height)
+        self.directory = os.path.join(CURRENT_WORKING_DIR, directory)
+        self.file_extension = file_extension
+        self.bg_color = bg_color
+        self.border_color = (80, 82, 86, 100)  # Slightly lighter border
+        self.file_selected_callback = file_selected_callback
+        
+        # Create directory if it doesn't exist
+        if not os.path.exists(self.directory):
+            os.makedirs(self.directory)
+        
+        # UI properties
+        self.border_radius = 10
+        self.font_name = "Inter" if "Inter" in pygame.font.get_fonts() else "Arial"
+        self.title_font = pygame.font.SysFont(self.font_name, 18, bold=True)
+        self.file_font = pygame.font.SysFont(self.font_name, 16)
+        self.info_font = pygame.font.SysFont(self.font_name, 14, italic=True)
+        
+        # Scrolling properties
+        self.scroll_y = 0
+        self.max_scroll = 0
+        self.scroll_speed = 20
+        self.item_height = 30
+        self.visible_items = (height - 60) // self.item_height  # Account for header and footer
+        
+        # Selection properties
+        self.selected_file = None
+        self.selected_index = -1
+        self.hover_index = -1
+        
+        # File list
+        self.files = []
+        self.refresh_file_list()
+    
+    def refresh_file_list(self):
+        """Update the list of MIDI files in the directory"""
+        self.files = []
+        try:
+            for file in os.listdir(self.directory):
+                if file.lower().endswith(self.file_extension):
+                    # Get file info
+                    file_path = os.path.join(self.directory, file)
+                    file_stats = os.stat(file_path)
+                    # Store file info: (name, full path, modification time)
+                    modified_time = datetime.datetime.fromtimestamp(file_stats.st_mtime)
+                    modified_str = modified_time.strftime("%Y-%m-%d %H:%M")
+                    self.files.append((file, file_path, modified_str))
+            
+            # Sort by modification time (newest first)
+            self.files.sort(key=lambda x: os.path.getmtime(x[1]), reverse=True)
+            
+            # Reset scroll position and update max scroll
+            self.update_max_scroll()
+            
+        except Exception as e:
+            print(f"Error refreshing file list: {e}")
+    
+    def update_max_scroll(self):
+        """Update the maximum scroll value based on file list length"""
+        total_items_height = len(self.files) * self.item_height
+        visible_area_height = self.rect.height - 60  # Account for header and footer
+        
+        if total_items_height > visible_area_height:
+            self.max_scroll = total_items_height - visible_area_height
+        else:
+            self.max_scroll = 0
+            self.scroll_y = 0
+    
+    def draw(self, screen):
+        """Draw the file browser"""
+        # Draw background
+        pygame.draw.rect(screen, self.bg_color, self.rect, border_radius=self.border_radius)
+        pygame.draw.rect(screen, self.border_color, self.rect, width=1, border_radius=self.border_radius)
+        
+        # Draw title
+        title_text = self.title_font.render("MIDI Files", True, (220, 220, 230))
+        title_rect = title_text.get_rect(
+            midtop=(self.rect.centerx, self.rect.y + 10)
+        )
+        screen.blit(title_text, title_rect)
+        
+        # Draw separator line
+        pygame.draw.line(screen, self.border_color, 
+                     (self.rect.x + 10, self.rect.y + 40), 
+                     (self.rect.right - 10, self.rect.y + 40),
+                     width=1)
+        
+        # Create a clipping rect for the file list
+        list_rect = pygame.Rect(
+            self.rect.x + 5,
+            self.rect.y + 45,
+            self.rect.width - 10,
+            self.rect.height - 55
+        )
+        
+        # Set clipping area
+        original_clip = screen.get_clip()
+        screen.set_clip(list_rect)
+        
+        # Draw file list
+        if not self.files:
+            # Draw "No files" message
+            info_text = self.info_font.render("No MIDI files found", True, (180, 180, 180))
+            info_rect = info_text.get_rect(
+                center=(self.rect.centerx, self.rect.y + 70)
+            )
+            screen.blit(info_text, info_rect)
+        else:
+            # Draw files
+            y_pos = self.rect.y + 45 - self.scroll_y
+            for i, (file_name, file_path, modified_date) in enumerate(self.files):
+                item_rect = pygame.Rect(
+                    self.rect.x + 5,
+                    y_pos,
+                    self.rect.width - 10,
+                    self.item_height
+                )
+                
+                # Skip if completely outside visible area
+                if y_pos + self.item_height < self.rect.y + 45 or y_pos > self.rect.y + self.rect.height - 10:
+                    y_pos += self.item_height
+                    continue
+                
+                # Determine item background color
+                if i == self.selected_index:
+                    # Selected item
+                    bg_color = (70, 120, 200)
+                elif i == self.hover_index:
+                    # Hovered item
+                    bg_color = (50, 52, 56)
+                else:
+                    # Normal item
+                    bg_color = None
+                
+                # Draw item background
+                if bg_color:
+                    pygame.draw.rect(screen, bg_color, item_rect, border_radius=5)
+                
+                # Draw file name (truncate if too long)
+                display_name = file_name
+                if len(display_name) > 30:
+                    display_name = display_name[:27] + "..."
+                    
+                name_color = (240, 240, 240) if i == self.selected_index else (220, 220, 220)
+                name_text = self.file_font.render(display_name, True, name_color)
+                screen.blit(name_text, (item_rect.x + 10, item_rect.y + 5))
+                
+                # Draw modified date
+                date_color = (220, 220, 220) if i == self.selected_index else (160, 160, 160)
+                date_text = self.info_font.render(modified_date, True, date_color)
+                date_rect = date_text.get_rect(right=item_rect.right - 10, y=item_rect.y + 8)
+                screen.blit(date_text, date_rect)
+                
+                y_pos += self.item_height
+        
+        # Reset clipping area
+        screen.set_clip(original_clip)
+        
+        # Draw scroll indicators if necessary
+        if self.max_scroll > 0:
+            if self.scroll_y > 0:
+                # Draw up arrow
+                pygame.draw.polygon(screen, (180, 180, 180), [
+                    (self.rect.right - 15, self.rect.y + 50),
+                    (self.rect.right - 10, self.rect.y + 45),
+                    (self.rect.right - 20, self.rect.y + 45)
+                ])
+            
+            if self.scroll_y < self.max_scroll:
+                # Draw down arrow
+                pygame.draw.polygon(screen, (180, 180, 180), [
+                    (self.rect.right - 15, self.rect.bottom - 10),
+                    (self.rect.right - 10, self.rect.bottom - 15),
+                    (self.rect.right - 20, self.rect.bottom - 15)
+                ])
+    
+    def update(self, mouse_pos):
+        """Update browser state based on mouse position"""
+        # Check if mouse is over file list area
+        list_rect = pygame.Rect(
+            self.rect.x + 5,
+            self.rect.y + 45,
+            self.rect.width - 10,
+            self.rect.height - 55
+        )
+        
+        if list_rect.collidepoint(mouse_pos):
+            # Calculate which file the mouse is hovering over
+            relative_y = mouse_pos[1] - list_rect.y + self.scroll_y
+            hover_index = int(relative_y // self.item_height)
+            
+            # Check if hover index is valid
+            if 0 <= hover_index < len(self.files):
+                self.hover_index = hover_index
+            else:
+                self.hover_index = -1
+        else:
+            self.hover_index = -1
+    
+    def handle_event(self, event):
+        """Handle mouse events"""
+        if event.type == pygame.MOUSEBUTTONDOWN:
+            # Check if click is inside file list area
+            list_rect = pygame.Rect(
+                self.rect.x + 5,
+                self.rect.y + 45,
+                self.rect.width - 10,
+                self.rect.height - 55
+            )
+            
+            if list_rect.collidepoint(event.pos):
+                # Handle scrolling
+                if event.button == 4:  # Scroll up
+                    self.scroll_y = max(0, self.scroll_y - self.scroll_speed)
+                    return True
+                
+                elif event.button == 5:  # Scroll down
+                    self.scroll_y = min(self.max_scroll, self.scroll_y + self.scroll_speed)
+                    return True
+                
+                # Handle file selection
+                elif event.button == 1:  # Left click
+                    relative_y = event.pos[1] - list_rect.y + self.scroll_y
+                    clicked_index = int(relative_y // self.item_height)
+                    
+                    # Check if clicked index is valid
+                    if 0 <= clicked_index < len(self.files):
+                        # Update selection
+                        self.selected_index = clicked_index
+                        self.selected_file = self.files[clicked_index][1]
+                        
+                        # Notify callback if set
+                        if self.file_selected_callback:
+                            self.file_selected_callback(self.selected_file)
+                        
+                        return True
+            
+            # Check if click is on refresh button (not implemented yet)
+            
+        # Handle mouse wheel for scrolling
+        elif event.type == pygame.MOUSEWHEEL:
+            if self.rect.collidepoint(pygame.mouse.get_pos()):
+                self.scroll_y = max(0, min(self.max_scroll, self.scroll_y - event.y * self.scroll_speed))
+                return True
+        
+        return False
+
+def add_midi_file_browser(screen_width, keyboard_rect_height, ui_panels_height):
+    """Create a file browser panel for MIDI files"""
+    browser_width = 300
+    browser_height = 400
+    
+    # Position on the right side of the screen
+    browser_x = screen_width - browser_width - 20
+    browser_y = keyboard_rect_height + 20
+    
+    # Create a file browser
+    file_browser = FileBrowser(
+        browser_x, browser_y, browser_width, browser_height,
+        directory=RECORDINGS_FOLDER, file_extension=".mid"
+    )
+    
+    # Create a UI panel to hold the browser
+    browser_panel = UIPanel(
+        browser_x - 10, browser_y - 10, 
+        browser_width + 20, browser_height + 20,
+        bg_color=(35, 37, 45)
+    )
+    browser_panel.set_title("MIDI File Browser")
+    
+    # Add refresh and play buttons for the file browser
+    button_y = browser_y + browser_height + 15
+    button_width = 140
+    button_height = 40
+    
+    refresh_button = Button(
+        browser_x, button_y,
+        button_width, button_height,
+        (80, 140, 200, 255),
+        "REFRESH",
+        text_color=WHITE,
+        icon="retry"
+    )
+    
+    load_button = Button(
+        browser_x + browser_width - button_width, button_y,
+        button_width, button_height,
+        (100, 180, 100, 255),
+        "LOAD",
+        text_color=WHITE,
+        icon="play"
+    )
+    
+    return file_browser, browser_panel, refresh_button, load_button
 
     # Create slider for temperature control
 class Slider:
-    def __init__(self, x, y, width, height, min_val, max_val, initial_val, label, integer_only=False):
+    def __init__(self, x, y, width, height, min_val, max_val, initial_val, label, 
+                 integer_only=False, primary_color=(100, 140, 230, 255)):
         self.rect = pygame.Rect(x, y, width, height)
-        self.handle_radius = height + 4  # Slightly larger handle
+        self.handle_radius = height
         self.min_val = min_val
         self.max_val = max_val
         self.value = initial_val
         self.label = label
-        self.integer_only = integer_only  # New flag to control integer-only mode
-        self.font = pygame.font.SysFont("Arial", 16)
-        self.value_font = pygame.font.SysFont("Arial", 14)
+        self.integer_only = integer_only
         self.dragging = False
-        self.track_color = (60, 60, 70)
-        self.track_active_color = (80, 100, 140)
-        self.handle_color = (120, 140, 220)
-        self.handle_hover_color = (140, 160, 240)
-        self.text_color = WHITE
         self.is_hovered = False
+        
+        # Modern design properties
+        self.primary_color = primary_color
+        self.track_color = (60, 62, 68)
+        self.track_active_color = primary_color
+        self.handle_color = (230, 230, 240)
+        self.handle_hover_color = (255, 255, 255)
+        self.text_color = (220, 220, 230)
+        self.value_color = primary_color[:3] + (255,)  # Alpha always 255 for text
+        
+        # Animation properties
+        self.current_handle_color = self.handle_color
+        self.color_transition_speed = 0.15
+        self.pulse_alpha = 0
+        self.pulse_size = 0
+        
+        # Font setup
+        self.font_name = "Inter" if "Inter" in pygame.font.get_fonts() else "Arial"
+        self.label_font = pygame.font.SysFont(self.font_name, 16)
+        self.value_font = pygame.font.SysFont(self.font_name, 14, bold=True)
+        self.bounds_font = pygame.font.SysFont(self.font_name, 12)
         
         # If integer-only mode is enabled, ensure the initial value is an integer
         if self.integer_only:
@@ -557,64 +1273,126 @@ class Slider:
             value = int(round(value))
             
         return value
+    
+    def _interpolate_color(self, color1, color2, fraction):
+        """Smoothly interpolate between two colors"""
+        r1, g1, b1 = color1[:3]
+        r2, g2, b2 = color2[:3]
         
-    def draw(self, screen):
-        # Draw background track (inactive part)
-        pygame.draw.rect(screen, self.track_color, self.rect, border_radius=self.rect.height//2)
+        r = int(r1 + (r2 - r1) * fraction)
+        g = int(g1 + (g2 - g1) * fraction)
+        b = int(b1 + (b2 - b1) * fraction)
         
-        # Draw active part of the track
-        active_width = self.handle_x - self.rect.x
-        if active_width > 0:
-            active_rect = pygame.Rect(self.rect.x, self.rect.y, active_width, self.rect.height)
-            pygame.draw.rect(screen, self.track_active_color, active_rect, border_radius=self.rect.height//2)
+        alpha = color1[3] if len(color1) > 3 else 255
+        return (r, g, b, alpha)
         
-        # Draw label above slider with value
-        label_text = self.font.render(f"{self.label}", True, self.text_color)
-        
-        # Format value based on integer-only mode
-        if self.integer_only:
-            value_text = self.value_font.render(f"{self.value}", True, (180, 200, 255))
-        else:
-            value_text = self.value_font.render(f"{self.value:.2f}", True, (180, 200, 255))
-        
-        # Position label centered above slider
-        label_x = self.rect.x + (self.rect.width - label_text.get_width()) // 2
-        screen.blit(label_text, (label_x, self.rect.y - 25))
-        
-        # Position value text below the label
-        value_x = self.rect.x + (self.rect.width - value_text.get_width()) // 2
-        screen.blit(value_text, (value_x, self.rect.y - 5))
-        
-        # Draw min/max values as smaller text
-        # Format based on integer-only mode
-        if self.integer_only:
-            min_text = self.value_font.render(f"{int(self.min_val)}", True, (150, 150, 150))
-            max_text = self.value_font.render(f"{int(self.max_val)}", True, (150, 150, 150))
-        else:
-            min_text = self.value_font.render(f"{self.min_val}", True, (150, 150, 150))
-            max_text = self.value_font.render(f"{self.max_val}", True, (150, 150, 150))
-            
-        screen.blit(min_text, (self.rect.x - 5, self.rect.y + self.rect.height + 5))
-        screen.blit(max_text, (self.rect.x + self.rect.width - 10, self.rect.y + self.rect.height + 5))
-        
-        # Draw handle with hover effect
-        handle_color = self.handle_hover_color if self.is_hovered or self.dragging else self.handle_color
-        pygame.draw.circle(screen, handle_color, (self.handle_x, self.rect.centery), self.handle_radius)
-        
-        # Draw handle border for better visibility
-        pygame.draw.circle(screen, (255, 255, 255, 100), (self.handle_x, self.rect.centery), 
-                         self.handle_radius, 1)
-        
-    def update(self, mouse_pos):
+    def update(self, mouse_pos, dt=1/60):
+        """Update slider state based on mouse position"""
         # Check if mouse is hovering over handle
         mouse_x, mouse_y = mouse_pos
         handle_rect = pygame.Rect(self.handle_x - self.handle_radius, 
                                  self.rect.centery - self.handle_radius,
                                  self.handle_radius * 2, 
                                  self.handle_radius * 2)
+        
+        prev_hovering = self.is_hovered
         self.is_hovered = handle_rect.collidepoint(mouse_x, mouse_y)
         
+        # Visual pulse effect when hover starts
+        if not prev_hovering and self.is_hovered:
+            self.pulse_alpha = 120
+            self.pulse_size = 0
+        
+        # Animate pulse effect
+        if self.pulse_alpha > 0:
+            self.pulse_alpha = max(0, self.pulse_alpha - 240 * dt)
+            self.pulse_size = min(12, self.pulse_size + 30 * dt)
+        
+        # Animate handle color
+        target_color = self.handle_hover_color if self.is_hovered or self.dragging else self.handle_color
+        self.current_handle_color = self._interpolate_color(
+            self.current_handle_color, target_color, self.color_transition_speed)
+        
+    def draw(self, screen):
+        # Draw background track
+        track_height = max(4, self.rect.height)  # Minimum height of 4 pixels
+        track_rect = pygame.Rect(
+            self.rect.x, 
+            self.rect.centery - track_height // 2,
+            self.rect.width, 
+            track_height
+        )
+        pygame.draw.rect(screen, self.track_color, track_rect, border_radius=track_height//2)
+        
+        # Draw active part of the track
+        active_width = self.handle_x - self.rect.x
+        if active_width > 0:
+            active_rect = pygame.Rect(
+                self.rect.x, 
+                self.rect.centery - track_height // 2,
+                active_width, 
+                track_height
+            )
+            pygame.draw.rect(screen, self.track_active_color, active_rect, border_radius=track_height//2)
+        
+        # Draw label above slider
+        label_text = self.label_font.render(f"{self.label}", True, self.text_color)
+        
+        # Format value based on integer-only mode
+        if self.integer_only:
+            value_text = self.value_font.render(f"{self.value}", True, self.value_color)
+        else:
+            value_text = self.value_font.render(f"{self.value:.2f}", True, self.value_color)
+        
+        # Position label centered above slider
+        label_x = self.rect.x + (self.rect.width - label_text.get_width()) // 2
+        screen.blit(label_text, (label_x, self.rect.y - 40))
+
+        # Position value text below the label
+        value_x = self.rect.x + (self.rect.width - value_text.get_width()) // 2
+        screen.blit(value_text, (value_x, self.rect.y - 20))
+        
+        # Draw min/max values as smaller text
+        # Format based on integer-only mode
+        if self.integer_only:
+            min_text = self.bounds_font.render(f"{int(self.min_val)}", True, (150, 150, 160))
+            max_text = self.bounds_font.render(f"{int(self.max_val)}", True, (150, 150, 160))
+        else:
+            min_text = self.bounds_font.render(f"{self.min_val:.1f}", True, (150, 150, 160))
+            max_text = self.bounds_font.render(f"{self.max_val:.1f}", True, (150, 150, 160))
+            
+        screen.blit(min_text, (self.rect.x - 5, self.rect.y + self.rect.height + 5))
+        screen.blit(max_text, (self.rect.x + self.rect.width - max_text.get_width() + 5, 
+                             self.rect.y + self.rect.height + 5))
+        
+        # Draw pulse effect when hovering begins
+        if self.pulse_alpha > 0:
+            pulse_radius = self.handle_radius + self.pulse_size
+            pulse_color = self.primary_color[:3] + (self.pulse_alpha,)
+            pygame.gfxdraw.filled_circle(screen, self.handle_x, self.rect.centery, 
+                                       int(pulse_radius), pulse_color)
+        
+        # Draw handle shadow
+        shadow_offset = 2
+        shadow_color = (30, 30, 35, 100)
+        pygame.gfxdraw.filled_circle(screen, self.handle_x, self.rect.centery + shadow_offset, 
+                                   self.handle_radius - 1, shadow_color)
+        
+        # Draw handle with animated color
+        pygame.gfxdraw.filled_circle(screen, self.handle_x, self.rect.centery, 
+                                   self.handle_radius - 1, self.current_handle_color)
+        
+        # Add subtle highlight to top of handle for 3D effect
+        if self.is_hovered or self.dragging:
+            highlight_color = (255, 255, 255, 80)
+            highlight_radius = self.handle_radius - 4
+            highlight_offset = -2
+            pygame.draw.circle(screen, highlight_color, 
+                             (self.handle_x, self.rect.centery + highlight_offset), 
+                             highlight_radius, width=1)
+        
     def handle_event(self, event):
+        """Handle mouse events for the slider"""
         if event.type == pygame.MOUSEBUTTONDOWN:
             # Check if clicked on handle or track
             mouse_x, mouse_y = event.pos
@@ -647,9 +1425,6 @@ class Slider:
                 return True
             
         elif event.type == pygame.MOUSEMOTION:
-            # Update hover state
-            self.update(event.pos)
-            
             # Update position if dragging
             if self.dragging:
                 self.handle_x = max(self.rect.x, min(event.pos[0], self.rect.x + self.rect.width))
@@ -657,7 +1432,7 @@ class Slider:
                 return True
             
         return False
-
+    
 def configure_pygame_audio_and_set_ui(
     framerate_hz: int,
     channels: int,
@@ -957,6 +1732,7 @@ def play_until_user_exits(
     clock = pygame.time.Clock()
     
     while playing:
+        buttons[0].is_active = recorder.recording
         mouse_pos = pygame.mouse.get_pos()
         
         # Update button hover states
@@ -1238,9 +2014,23 @@ def play_until_user_exits(
                 if tokens_slider:
                     tokens_slider.handle_event(event)
         
+        # Animation for record button
+        if recorder.recording and buttons[0].icon == "record":
+            # Change the button color to pulse
+            pulse_amt = (math.sin(pygame.time.get_ticks() / 200) + 1) / 2  # 0 to 1
+            buttons[0].color = (
+                255,  # Full red
+                int(40 * pulse_amt),  # Pulsing green
+                int(40 * pulse_amt),  # Pulsing blue
+                255
+            )
+        else:
+            # Reset to original color when not recording
+            buttons[0].color = (220, 60, 60, 255)  # Original red
+
         # Redraw screen
         screen.fill((20, 20, 25))  # Dark blue-gray background
-        
+
         # Draw keyboard
         keyboard.draw(screen)
         
@@ -1264,44 +2054,6 @@ def play_until_user_exits(
             status_y = ai_panel.rect.y + ai_panel.rect.height - 40  # Position at bottom of AI panel
             status.draw(screen, (status_x, status_y))
         
-        # Update and draw recording indicator if recording
-        if recorder.recording:
-            # Animate the recording indicator
-            if recording_indicator_growing:
-                recording_indicator_size += 0.5
-                if recording_indicator_size >= 14:
-                    recording_indicator_growing = False
-            else:
-                recording_indicator_size -= 0.5
-                if recording_indicator_size <= 8:
-                    recording_indicator_growing = True
-            
-            # Draw animated recording indicator
-            indicator_x = screen.get_width() - 40
-            indicator_y = keyboard.rect.height + 40
-            
-            # Pulsating transparent circle behind
-            pulse_surface = pygame.Surface((30, 30), pygame.SRCALPHA)
-            pygame.gfxdraw.filled_circle(
-                pulse_surface, 
-                15, 
-                15, 
-                int(recording_indicator_size * 1.5),
-                (255, 0, 0, max(0, int(80 - (recording_indicator_size * 5))))
-            )
-            screen.blit(pulse_surface, (indicator_x - 15, indicator_y - 15))
-            
-            # Solid circle
-            pygame.gfxdraw.filled_circle(screen, indicator_x, indicator_y, 
-                                       int(recording_indicator_size), (255, 0, 0))
-            pygame.gfxdraw.aacircle(screen, indicator_x, indicator_y, 
-                                   int(recording_indicator_size), (255, 0, 0))
-            
-            # "REC" text
-            rec_font = pygame.font.SysFont("Arial", 16, bold=True)
-            rec_text = rec_font.render("REC", True, (255, 255, 255))
-            screen.blit(rec_text, (indicator_x - 40, indicator_y - 8))
-            
         # Draw AI generation loading indicator if active
         if ai_generation_active:
             # Draw loading spinner in the center of the AI panel
@@ -1326,7 +2078,21 @@ def play_until_user_exits(
             gen_font = pygame.font.SysFont("Arial", 16, bold=True)
             gen_text = gen_font.render("Generating AI Continuation...", True, (200, 200, 255))
             screen.blit(gen_text, (spinner_x - gen_text.get_width() // 2, spinner_y + 30))
+        
+        if recorder.recording:
+            # Position next to the Record button
+            rec_x = buttons[0].rect.right + 10
+            rec_y = buttons[0].rect.centery - 8
             
+            # Pulsing effect
+            alpha = 128 + int(127 * math.sin(time.time() * 4))
+            
+            # Draw "REC" text
+            rec_font = pygame.font.SysFont("Arial", 16, bold=True)
+            rec_text = rec_font.render("● REC", True, (255, 50, 50))
+            rec_text.set_alpha(alpha)
+            screen.blit(rec_text, (rec_x, rec_y))
+                    
         pygame.display.update()
         
         # Cap the frame rate
